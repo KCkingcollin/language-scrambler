@@ -1,0 +1,49 @@
+package lib
+
+import (
+	"os"
+	"path"
+	"strings"
+	"golang.org/x/text/language"
+)
+
+const LanguageDirName = "languages"
+
+var (
+	Languages []lang.Tag
+	Dictionary = make(map[word]word)
+	StarLocation, _ = os.Executable()
+	LanguagePath = path.Join(StarLocation, LanguageDirName)
+)
+
+func GetLanguages() error {
+	dir, err := os.ReadDir(LanguagePath)
+	if err != nil {
+		return err
+	}
+	Languages = make([]language.Tag, 0, len(dir))
+	for i := range Languages {
+		lang := strings.TrimSpace(dir[i].Name())
+		lang = strings.TrimRight(lang, ".")
+		if lang != "" {
+			Languages = append(Languages, lang.)
+		}
+	}
+	return nil
+}
+
+func GetWordsFromText(text ...word) ([]word, error) {
+	words := make(map[string]int)
+	for _, w := range text {
+		words[strings.ToLower(strings.TrimSpace(w.W))]++
+	}
+	var wordFrequencies []word
+	for w, frequency := range words {
+		wordFrequencies = append(wordFrequencies, word{W: w, Frequency: frequency})
+	}
+	return wordFrequencies, nil
+}
+
+func BuildDictionary(fromLang, toLang language, text ...word) error {
+	return nil
+}
