@@ -106,7 +106,7 @@ func ReadConvertionList(data []byte) (map[string]word, error) {
 	return dict, nil
 }
 
-func BuildDictionary(fromList string, toLang language.Tag, text ...word) error {
+func BuildDictionary(fromList string, toLang language.Tag, text ...string) error {
 	converterPath := path.Join(DictionaryPath, fromList+"-"+toLang.String()+".csv")
 	data, err := os.ReadFile(converterPath)
 	if err != nil {
@@ -122,5 +122,12 @@ func BuildDictionary(fromList string, toLang language.Tag, text ...word) error {
 	if err != nil {
 		return err
 	}
+
+	for _, s := range text {
+		w := Dictionary[CleanUpWord(s)]
+		w.Frequency++
+		Dictionary[CleanUpWord(s)] = w
+	}
+
 	return nil
 }
