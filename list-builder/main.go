@@ -32,7 +32,6 @@ var (
 		htmlStructure: []string{
 			"html",
 			"body",
-			"ul",
 		},
 		classStructure: []string{
 			"mw-page-container",
@@ -42,7 +41,6 @@ var (
 			"mw-category-generated",
 			"mw-content-ltr",
 			"mw-category mw-category-columns",
-			"mw-category-group",
 		},
 		idStructure: []string{
 			"bodyContent",
@@ -55,7 +53,7 @@ var (
 		fileName: "de",
 	}
 	jplistInfo = listStruct{
-		wordUrls: []string{"https://en.wiktionary.org/w/index.php?title=Category:Japanese_nouns", "https://en.wiktionary.org/w/index.php?title=Category:Japanese_verbs"},
+		wordUrls: []string{"https://en.wiktionary.org/w/index.php?title=Category:Japanese_verbs", "https://en.wiktionary.org/w/index.php?title=Category:Japanese_nouns"},
 		fileName: "jp",
 	}
 	enListInfo = listStruct{
@@ -127,9 +125,18 @@ func wiktionaryScraper(urls ...string) ([]string, error) {
 			nextPage = ""
 			nextPage, doc = findListNodesWiki(&nextPage, doc)
 
-			for li := range doc.ChildNodes() {
-				if li.Type == html.ElementNode {
-					list = append(list, li.FirstChild.FirstChild.Data)
+			// the lists are sometimes broken into categories so we need to look through those too
+			for group := range doc.ChildNodes() {
+				if group.Type == html.ElementNode && group.Data == "div" {
+					for node := range group.ChildNodes() {
+						if node.Type == html.ElementNode && node.Data == "ul" {
+							for li := range node.ChildNodes() {
+								if li.Type == html.ElementNode {
+									list = append(list, li.FirstChild.FirstChild.Data)
+								}
+							}
+						}
+					}
 				}
 			}
 		}
@@ -147,7 +154,7 @@ func wiktionaryScraper(urls ...string) ([]string, error) {
 
 // lists built from wiktionary
 func buildListSet1() error {
-	listSet := []listStruct{delistInfo, jplistInfo, enListInfo, esListInfo}
+	listSet := []listStruct{delistInfo, jplistInfo, esListInfo, enListInfo}
 	for _, d := range listSet {
 		fileLocation := path.Join(dictionaryLocation, d.fileName+".list")
 		if _, err := os.Open(fileLocation); !os.IsNotExist(err) {
