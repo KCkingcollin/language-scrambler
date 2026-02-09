@@ -17,12 +17,14 @@ const DictionaryDirName = "dictionaries"
 var (
 	WordLists []string
 	Dictionary = make(map[string]word)
+	DictionaryTree = make(map[rune]runeNode)
 	StarLocation, _ = os.Executable()
 	DictionaryPath = path.Join(StarLocation, DictionaryDirName)
+	MaxFrequency int
 )
 
 // makes word all lowercase and removes any extra white space
-func CleanUpWord(w string) string {
+func cleanUpWord(w string) string {
 	return strings.ToLower(strings.TrimSpace(w))
 }
 
@@ -41,19 +43,7 @@ func GetListNames() error {
 	return nil
 }
 
-func GetWordsFromText(text ...word) ([]word, error) {
-	words := make(map[string]int)
-	for _, w := range text {
-		words[strings.ToLower(strings.TrimSpace(w.Translation))]++
-	}
-	var wordFrequencies []word
-	for w, frequency := range words {
-		wordFrequencies = append(wordFrequencies, word{Translation: w, Frequency: frequency})
-	}
-	return wordFrequencies, nil
-}
-
-func NewConversionList(csvPath, fromList string, toLang language.Tag) (map[string]word, error) {
+func newConversionList(csvPath, fromList string, toLang language.Tag) (map[string]word, error) {
 	data, err := os.ReadFile(path.Join(DictionaryPath, fromList+".list"))
 	if err != nil {
 		return nil, err
@@ -75,8 +65,8 @@ func NewConversionList(csvPath, fromList string, toLang language.Tag) (map[strin
 	converter := make([][]string, 0, len(list))
 	dict := make(map[string]word, len(list))
 	for i, s := range list {
-		converter = append(converter, []string{CleanUpWord(s), CleanUpWord(translations[i].Text)})
-		dict[CleanUpWord(s)] = word{Translation: CleanUpWord(translations[i].Text)}
+		converter = append(converter, []string{cleanUpWord(s), cleanUpWord(translations[i].Text)})
+		dict[cleanUpWord(s)] = word{Translation: cleanUpWord(translations[i].Text)}
 	}
 
 	file, err := os.Create(csvPath)
@@ -93,7 +83,7 @@ func NewConversionList(csvPath, fromList string, toLang language.Tag) (map[strin
 	return dict, nil
 }
 
-func ReadConvertionList(data []byte) (map[string]word, error) {
+func readConvertionList(data []byte) (map[string]word, error) {
 	listReader := csv.NewReader(bytes.NewReader(data))
 	list, err := listReader.ReadAll()
 	if err != nil {
@@ -101,32 +91,45 @@ func ReadConvertionList(data []byte) (map[string]word, error) {
 	}
 	dict := make(map[string]word)
 	for _, line := range list {
-		dict[CleanUpWord(line[0])] = word{Translation: CleanUpWord(line[1])}
+		dict[cleanUpWord(line[0])] = word{Translation: cleanUpWord(line[1])}
 	}
 	return dict, nil
 }
 
-func BuildDictionary(fromList string, toLang language.Tag, text ...string) error {
+func BuildDictionary(fromList string, toLang language.Tag, text string) error {
 	converterPath := path.Join(DictionaryPath, fromList+"-"+toLang.String()+".csv")
 	data, err := os.ReadFile(converterPath)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			return err
 		}
-		Dictionary, err = NewConversionList(converterPath, fromList, toLang)
+		Dictionary, err = newConversionList(converterPath, fromList, toLang)
 		if err != nil {
 			return err
 		}
 	}
-	Dictionary, err = ReadConvertionList(data)
+	Dictionary, err = readConvertionList(data)
 	if err != nil {
 		return err
 	}
 
-	for _, s := range text {
-		w := Dictionary[CleanUpWord(s)]
-		w.Frequency++
-		Dictionary[CleanUpWord(s)] = w
+	for s, w := range Dictionary {
+		w.Frequency = strings.Count(text, s)
+		Dictionary[s] = w
+		if w.Frequency > MaxFrequency {
+			MaxFrequency = w.Frequency
+		}
+
+		var node runeNode
+		node.next = DictionaryTree
+		for _, r := range s {
+			newNode, ok := node.next[r]
+			if !ok {
+				newNode = runeNode{R: r, next: make(map[rune]runeNode)}
+				node.next[r] = newNode
+			}
+			node = newNode
+		}
 	}
 
 	return nil
