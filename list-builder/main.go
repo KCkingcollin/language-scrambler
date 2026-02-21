@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	dictionaryLocation = "../dictionaries"
+	dictionaryLocation = "dictionaries"
 )
 
 type (
@@ -54,7 +54,7 @@ var (
 	}
 	jplistInfo = listStruct{
 		wordUrls: []string{"https://en.wiktionary.org/w/index.php?title=Category:Japanese_verbs", "https://en.wiktionary.org/w/index.php?title=Category:Japanese_nouns"},
-		fileName: "jp",
+		fileName: "ja",
 	}
 	enListInfo = listStruct{
 		wordUrls: []string{"https://en.wiktionary.org/w/index.php?title=Category:English_verbs", "https://en.wiktionary.org/w/index.php?title=Category:English_nouns"},
@@ -132,7 +132,7 @@ func wiktionaryScraper(urls ...string) ([]string, error) {
 						if node.Type == html.ElementNode && node.Data == "ul" {
 							for li := range node.ChildNodes() {
 								if li.Type == html.ElementNode {
-									list = append(list, li.FirstChild.FirstChild.Data)
+									list = append(list, strings.TrimSpace(strings.ToLower(li.FirstChild.FirstChild.Data)))
 								}
 							}
 						}
@@ -155,6 +155,14 @@ func wiktionaryScraper(urls ...string) ([]string, error) {
 // lists built from wiktionary
 func buildListSet1() error {
 	listSet := []listStruct{delistInfo, jplistInfo, esListInfo, enListInfo}
+	_, err := os.ReadDir(dictionaryLocation)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("%s", fmt.Sprintln(dictionaryLocation, "needs to exist in the current dir"))
+		} else {
+			return err
+		}
+	}
 	for _, d := range listSet {
 		fileLocation := path.Join(dictionaryLocation, d.fileName+".list")
 		if _, err := os.Open(fileLocation); !os.IsNotExist(err) {
