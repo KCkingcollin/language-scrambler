@@ -18,15 +18,15 @@ func ConvertText(opts ScramOpts, file *os.File) ([]byte, error) {
 	for i := range text {
 		var j int
 		var r rune
-		node := runeNode{next: DictionaryTree}
+		node := DictionaryTree
 		for j, r = range text[i:] {
-			newNode, ok := node.next[r]
+			newNode, ok := node.Next[r]
 			if !ok {
 				break
 			}
 			node = newNode
 		}
-		w, ok := Dictionary[text[i:j]]
+		w, ok := LoadedDictionary[text[i:j]]
 		if ok && w.Frequency > int(reqFrequency) {
 			startText := text[:i]
 			endText := text[j+1:]

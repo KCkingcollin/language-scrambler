@@ -1,7 +1,8 @@
 package lib
 
 import (
-	"log"
+	"reflect"
+	"strings"
 
 	"golang.org/x/text/language"
 )
@@ -17,46 +18,54 @@ type (
 		DifGradient float32
 	}
 
-	word struct {
+	Noun struct{}
+	Verb struct{}
+
+	Word struct {
+		W string
 		Translation string
 		Frequency int
+		Type reflect.Type
 	}
 
-	runeNode struct {
-		R rune
-		next map[rune]runeNode
+	RuneNode struct {
+		Root *RuneNode
+		Next map[rune]*RuneNode
+		W *Word
 	}
 
-	TranslateResponse struct {
-		TranslatedText string `json:"translatedText"`
+	Lang struct {
+		Name string
+		Tag language.Tag
 	}
+
+	// string should be a cleaned version, where as the W variable in Word should be the original
+	Dictionary map[string]Word
 )
 
 var (
-	SupportedLangs = []language.Base{
-		GetBase("en"), 
-		GetBase("de"), 
-		GetBase("ja"),
-		GetBase("es"), 
-		//need to make lists for these
-		GetBase("ru"),
-		GetBase("sv"),
-		GetBase("pt"),
-		GetBase("nl"),
-		GetBase("it"),
-		GetBase("fr"),
-		GetBase("fr"),
-		GetBase("eo"),
-		GetBase("no"),
-		GetBase("zh"),
+	SupportedLangs = []Lang{
+		{"English", language.English},
+		{"Spanish", language.Spanish},
+		{"German", language.German},
+		{"Japanese", language.Japanese},
+		{"Russian", language.Russian},
+		{"Swedish", language.Swedish},
+		{"Portuguese", language.Portuguese},
+		{"Dutch", language.Dutch},
+		{"Italian", language.Italian},
+		{"French", language.French},
+		{"Chinese", language.Chinese},
 	}
 )
 
-func GetBase(name string) language.Base {
-	base, err := language.ParseBase(name)
-	if err != nil {
-		log.Println("error finding base for", name)
+func ParseWordType(s string) reflect.Type {
+	switch {
+	case strings.Contains(s, "noun"):
+		return reflect.TypeFor[Noun]()
+	case strings.Contains(s, "verb"):
+		return reflect.TypeFor[Verb]()
+	default:
+		return nil
 	}
-	return base
 }
-

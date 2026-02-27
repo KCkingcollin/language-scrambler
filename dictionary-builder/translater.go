@@ -1,109 +1,138 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
-	"strings"
+	"sync"
+	"time"
 
 	. "langscram-lib" //nolint
 
 	"golang.org/x/text/language"
 )
 
-const (
-	langUrlBasePart1 = "https://raw.githubusercontent.com/open-dict-data/wikidict-"
-	langUrlBasePart2 = "/refs/heads/master/data/"
-	langUrlBasePart3 = "-"
-	langUrlBasePart4 = "_wiki.txt"
-)
+const libreTranslateURL = "http://localhost:5000/translate"
 
-type t struct {
-	Dictionary map[string]map[language.Base]string
-	Lang language.Base
+type translateRequest struct {
+	Q      []string `json:"q"`
+	Source string   `json:"source"`
+	Target string   `json:"target"`
+	Format string   `json:"format"`
 }
 
-var Translater t
-
-func getLangUrl(fromLang, toLang language.Base) string {
-	return langUrlBasePart1+toLang.String()+langUrlBasePart2+fromLang.String()+langUrlBasePart3+toLang.String()+langUrlBasePart4
+type translateResponse struct {
+	TranslatedText []string `json:"translatedText"`
 }
 
-func getLangDictionary(fromLang, toLang language.Base) ([][]string, error) {
-    response, err := http.Get(getLangUrl(fromLang, toLang))
-    if err != nil {
-        return nil, err
-    }
-    defer response.Body.Close() //nolint
+var httpClient = &http.Client{
+	Timeout: 2 * time.Minute,
+}
 
-    body, err := io.ReadAll(response.Body)
-    if err != nil {
-        return nil, err
-    }
-	var output [][]string
-	for s := range strings.SplitSeq(strings.TrimSpace(string(body)), "\n") {
-		output = append(output, strings.Split(s, "\t"))
+func TranslateWords(words []Word, fromLang, toLang language.Tag) ([]string, error) {
+	const batchSize = 100
+	results := make([]string, len(words))
+	totalBatches := (len(words) + batchSize - 1) / batchSize
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, 1)
+	progressCh := make(chan int, totalBatches)
+
+	const maxWorkers = 4
+
+	sem := make(chan struct{}, maxWorkers)
+	for i := 0; i < len(words); i += batchSize {
+		i, end := i, min(len(words), i+batchSize)
+		batch := words[i:end]
+
+		wg.Add(1)
+		go func(start int, batch []Word) {
+			defer wg.Done()
+			sem <- struct{}{}        // acquire
+			defer func() { <-sem }() // release
+
+			translations, err := translateBatch(batch, fromLang, toLang)
+			if err != nil {
+				select {
+				case errCh <- err:
+				default:
+				}
+				return
+			}
+			copy(results[start:start+len(batch)], translations)
+			progressCh <- len(batch)
+		}(i, batch)
 	}
-	return output, nil
+
+	// Progress printer
+	doneCh := make(chan struct{})
+	go func() {
+		completed := 0
+		for n := range progressCh {
+			completed += n
+			fmt.Printf("\r\033[K%.1f%%", float32(completed)/float32(len(words))*100)
+		}
+		fmt.Println()
+		doneCh <- struct{}{}
+	}()
+
+	wg.Wait()
+	close(progressCh)
+	<-doneCh
+
+	select {
+	case err := <-errCh:
+		return nil, err
+	default:
+	}
+
+	return results, nil
 }
 
-func BuildTranslatorDictionary(fromLang language.Base) (map[string]map[language.Base]string, error) {
-	totalLoops := float32(len(SupportedLangs))
-	var loopCounter float32
-	translationDictionary := make(map[string]map[language.Base]string, int(1e6))
-	for _, toLang := range SupportedLangs {
-		loopCounter++
-		if fromLang == toLang { continue }
-		dictionary, err := getLangDictionary(fromLang, toLang)
-		if err != nil {
-			return nil, err
-		}
-		for i, l := range dictionary {
-			if len(l) != 2 {
-				return nil, fmt.Errorf("the dictionary line %d containing \"%s\" was broken, had a length of %d", i, strings.Join(l, "\t"), len(l))
-			}
-			word := CleanUpWord(l[0])
-			translation := CleanUpWord(l[1])
-			if translationDictionary[word] == nil {
-				translationDictionary[word] = make(map[language.Base]string, len(SupportedLangs)-1)
-			}
-			translationDictionary[word][toLang] = translation
-		}
-
-		dictionary, err = getLangDictionary(toLang, fromLang)
-		if err != nil {
-			return nil, err
-		}
-		for i, l := range dictionary {
-			if len(l) != 2 {
-				return nil, fmt.Errorf("the dictionary line %d containing \"%s\" was broken, had a length of %d", i, strings.Join(l, "\t"), len(l))
-			}
-			word := CleanUpWord(l[1])
-			translation := CleanUpWord(l[0])
-			if translationDictionary[word] == nil {
-				translationDictionary[word] = make(map[language.Base]string, len(SupportedLangs)-1)
-			}
-			translationDictionary[word][toLang] = translation
-		}
-
-		fmt.Printf("\033[2K\rProgress %d%%", int(loopCounter/totalLoops*100))
-	} 
-	fmt.Println()
-	return translationDictionary, nil
-}
-
-func TranslateWords(words []string, fromLang, toLang language.Base) ([]string, error) {
-	if Translater.Lang != fromLang {
-		var err error
-		Translater.Dictionary, err = BuildTranslatorDictionary(fromLang); 
-		if err != nil {
-			return nil, err
-		}
-		Translater.Lang = fromLang
+func translateBatch(words []Word, fromLang, toLang language.Tag) ([]string, error) {
+	texts := make([]string, len(words))
+	for i, w := range words {
+		texts[i] = w.W
 	}
-	var translations []string
-	for _, w := range words {
-		translations = append(translations, Translater.Dictionary[CleanUpWord(w)][toLang])
+
+	reqBody := translateRequest{
+		Q:      texts,
+		Source: fromLang.String(),
+		Target: toLang.String(),
+		Format: "text",
 	}
-	return translations, nil
+	data, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := httpClient.Post(
+		libreTranslateURL,
+		"application/json",
+		bytes.NewBuffer(data),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close() //nolint
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("libretranslate returned %s", resp.Status)
+	}
+
+	var tr translateResponse
+	if err := json.NewDecoder(resp.Body).Decode(&tr); err != nil {
+		return nil, err
+	}
+
+	if len(tr.TranslatedText) != len(words) {
+		return nil, fmt.Errorf(
+			"translation count mismatch: sent %d, got %d",
+			len(words),
+			len(tr.TranslatedText),
+		)
+	}
+
+	return tr.TranslatedText, nil
 }

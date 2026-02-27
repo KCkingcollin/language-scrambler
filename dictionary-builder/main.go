@@ -8,127 +8,127 @@ import (
 	"log"
 	"os"
 	"path"
-	"strings"
 	"time"
 
 	"golang.org/x/text/language"
 )
 
-func GetListNames() error {
-	dir, err := os.ReadDir(DictionaryPath)
-	if err != nil {
-		return err
-	}
-	WordLists = make([]string, 0, len(dir))
-	for _, file := range dir {
-		name := CleanUpWord(file.Name())
-		if strings.TrimRight(name, ".") != "" && strings.HasSuffix(name, ".list") {
-			WordLists = append(WordLists, strings.TrimSuffix(name, ".list"))
-		}
-	}
-	return nil
-}
-
-func BuildConverter(fromList language.Base, listPath, csvPath string) ([]byte, error) {
-	listData, err := os.ReadFile(listPath)
+func BuildConverter(fromList language.Tag) ([]byte, error) {
+	wordsMap, err := LoadList(fromList)
 	if err != nil {
 		return nil, err
 	}
-	words := strings.Split(string(listData), "\n")
 
-	converterMap := make(map[string]map[language.Base]string, len(words))
+	words := make([]Word, 0, len(wordsMap))
+	for _, w := range wordsMap {
+		words = append(words, w)
+	}
 
-	fmt.Println("translating", len(words), "words to", len(SupportedLangs)-1, "languages")
-	allTranslations := make([]map[language.Base]string, len(words))
+	header := []string{fromList.String()}
+	targetLangs := make([]language.Tag, 0, len(SupportedLangs)-1)
+
 	for _, toLang := range SupportedLangs {
-		if toLang == fromList {
+		if toLang.Tag == fromList {
 			continue
 		}
+		header = append(header, toLang.Tag.String())
+		targetLangs = append(targetLangs, toLang.Tag)
+	}
 
+	fmt.Println("translating", len(words), "words to", len(targetLangs), "languages")
+
+	allTranslations := make([]map[language.Tag]string, len(words))
+
+	for _, toLang := range targetLangs {
 		timer := time.Now()
+
 		translations, err := TranslateWords(words, fromList, toLang)
 		if err != nil {
 			return nil, err
 		}
 
-		for i := range allTranslations {
+		if len(translations) != len(words) {
+			return nil, fmt.Errorf(
+				"translation length mismatch: got %d, expected %d",
+				len(translations),
+				len(words),
+			)
+		}
+
+		for i := range words {
 			if allTranslations[i] == nil {
-				allTranslations[i] = make(map[language.Base]string, len(SupportedLangs)-1)
+				allTranslations[i] = make(map[language.Tag]string, len(targetLangs))
 			}
 			allTranslations[i][toLang] = translations[i]
 		}
 
-		log.Println("translated to", toLang.String()+".", fmt.Sprintf("took %s.", time.Since(timer)))
+		log.Println(
+			"translated to",
+			toLang.String()+".",
+			fmt.Sprintf("took %s.", time.Since(timer)),
+		)
 	}
 
-	for i, m := range allTranslations {
-		converterMap[CleanUpWord(words[i])] = m
-	}
+	converter := make([][]string, 0, len(words)+1)
+	converter = append(converter, header)
 
-	converter := make([][]string, len(words)+1)
-	converter[0] = append(converter[0], fromList.String())
-	for _, lang := range SupportedLangs {
-		if lang == fromList {
-			continue
-		}
-		converter[0] = append(converter[0], lang.String())
-	}
 	var missingWords int
+
 	for i, word := range words {
-		converter[i+1] = []string{word}
-		for _, l := range converter[0][1:] {
-			lang, _ := language.ParseBase(l)
-			translation := converterMap[word][lang]
+		row := make([]string, 0, len(header))
+		row = append(row, word.W)
+
+		for _, lang := range targetLangs {
+			translation := allTranslations[i][lang]
 			if translation == "" {
 				missingWords++
 			}
-			converter[i+1] = append(converter[i+1], translation)
+			row = append(row, translation)
 		}
+
+		converter = append(converter, row)
 	}
+
 	fmt.Println("we're missing", missingWords, "words")
 
-	buffer := new(bytes.Buffer)
+	var buffer bytes.Buffer
+	writer := csv.NewWriter(&buffer)
 
-	file, err := os.Create(csvPath)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close() //nolint
-	
-	if err := csv.NewWriter(buffer).WriteAll(converter); err != nil {
+	if err := writer.WriteAll(converter); err != nil {
 		return nil, err
 	}
 
-	data := make([]byte, buffer.Len())
-	if _, err := buffer.Read(data); err != nil {
+	writer.Flush()
+	if err := writer.Error(); err != nil {
 		return nil, err
 	}
 
-	if _, err := file.Write(data); err != nil {
-		return nil, err
-	}
-
-	return data, nil
+	return buffer.Bytes(), nil
 }
 
-
 func main() {
-	if err := GetListNames(); err != nil {
-		log.Println(err)
-	}
-	fmt.Println(WordLists)
-	for _, listName := range WordLists {
-		converterPath := path.Join(DictionaryPath, listName+"-"+ConverterDictionaryName+".csv")
+	for _, lang := range SupportedLangs {
+		converterPath := path.Join(DictionaryPath, lang.Tag.String()+"-"+ConverterDictionaryName+".csv")
 		_, err := os.ReadFile(converterPath)
 		if err != nil {
 			if !os.IsNotExist(err) {
 				log.Println(err)
 				continue
 			}
-			base, _ := language.ParseBase(listName)
-			_, err = BuildConverter(base, path.Join(DictionaryPath, listName+".list"), converterPath)
+
+			data, err := BuildConverter(lang.Tag)
 			if err != nil {
-				log.Println("making conversion list: %w", err)
+				log.Fatalln("making conversion list:", err)
+			}
+
+			file, err := os.Create(converterPath)
+			if err != nil {
+				log.Fatalln("making file:", err)
+			}
+			defer file.Close() //nolint
+
+			if _, err := file.Write(data); err != nil {
+				log.Fatalln("writing conversion list: ", err)
 			}
 		}
 	}

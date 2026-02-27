@@ -1,14 +1,20 @@
 package main
 
 import (
+	"bytes"
+	"encoding/csv"
 	"fmt"
+	. "langscram-lib" //nolint
+	"log"
 	"net/http"
 	"os"
 	"path"
+	"reflect"
 	"slices"
 	"strings"
 
 	"golang.org/x/net/html"
+	"golang.org/x/text/language"
 )
 
 const (
@@ -20,10 +26,6 @@ type (
 		htmlStructure []string
 		classStructure []string
 		idStructure []string
-	}
-	listStruct struct {
-		wordUrls []string
-		fileName string
 	}
 )
 
@@ -47,22 +49,6 @@ var (
 			"mw-content-text",
 			"mw-pages",
 		},
-	}
-	delistInfo = listStruct{
-		wordUrls: []string{"https://en.wiktionary.org/w/index.php?title=Category:German_verbs", "https://en.wiktionary.org/w/index.php?title=Category:German_nouns"},
-		fileName: "de",
-	}
-	jplistInfo = listStruct{
-		wordUrls: []string{"https://en.wiktionary.org/w/index.php?title=Category:Japanese_verbs", "https://en.wiktionary.org/w/index.php?title=Category:Japanese_nouns"},
-		fileName: "ja",
-	}
-	enListInfo = listStruct{
-		wordUrls: []string{"https://en.wiktionary.org/w/index.php?title=Category:English_verbs", "https://en.wiktionary.org/w/index.php?title=Category:English_nouns"},
-		fileName: "en",
-	}
-	esListInfo = listStruct{
-		wordUrls: []string{"https://en.wiktionary.org/w/index.php?title=Category:Spanish_verbs", "https://en.wiktionary.org/w/index.php?title=Category:Spanish_nouns"},
-		fileName: "es",
 	}
 )
 
@@ -94,11 +80,17 @@ func findListNodesWiki(nextPage *string, doc *html.Node) (string, *html.Node) {
 	return *nextPage, doc
 }
 
-func wiktionaryScraper(urls ...string) ([]string, error) {
-	var list []string
+func wiktionaryScraper(urls ...string) (map[string]Word, error) {
+	list := make(map[string]Word)
 	client := &http.Client{}
 	wordCount := make([]int, len(urls))
 	for i, nextPage := range urls {
+		var wordType reflect.Type
+		if i < 1 {
+			wordType = reflect.TypeFor[Verb]()
+		} else {
+			wordType = reflect.TypeFor[Noun]()
+		}
 		var count int
 		for nextPage != "" {
 			count++
@@ -132,7 +124,10 @@ func wiktionaryScraper(urls ...string) ([]string, error) {
 						if node.Type == html.ElementNode && node.Data == "ul" {
 							for li := range node.ChildNodes() {
 								if li.Type == html.ElementNode {
-									list = append(list, strings.TrimSpace(strings.ToLower(li.FirstChild.FirstChild.Data)))
+									word := Word{W: li.FirstChild.FirstChild.Data, Type: wordType}
+									if CleanUpWord(word.W) != "" {
+										list[word.W] = word
+									}
 								}
 							}
 						}
@@ -148,13 +143,25 @@ func wiktionaryScraper(urls ...string) ([]string, error) {
 		wordCount[i] = len(list)-totalWords
 	}
 
-	fmt.Println(len(list), "words", wordCount[0], "verbs", wordCount[1], "nouns")
+	if len(list) < 1 {
+		return nil, fmt.Errorf("somehow we got nothing")
+	}
+
+	log.Println(len(list), "words", wordCount[0], "verbs", wordCount[1], "nouns")
 	return list, nil
+}
+
+func GetUrlList() map[language.Tag][]string {
+	urlBase := "https://en.wiktionary.org/w/index.php?title=Category:"
+	urlList := make(map[language.Tag][]string, len(SupportedLangs))
+	for _, l := range SupportedLangs {
+		urlList[l.Tag] = []string{urlBase+l.Name+"_verbs", urlBase+l.Name+"_nouns"}
+	}
+	return urlList
 }
 
 // lists built from wiktionary
 func buildListSet1() error {
-	listSet := []listStruct{delistInfo, jplistInfo, esListInfo, enListInfo}
 	_, err := os.ReadDir(dictionaryLocation)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -163,15 +170,20 @@ func buildListSet1() error {
 			return err
 		}
 	}
-	for _, d := range listSet {
-		fileLocation := path.Join(dictionaryLocation, d.fileName+".list")
+	for langTag, urls := range GetUrlList() {
+		fileLocation := path.Join(dictionaryLocation, langTag.String()+".list")
 		if _, err := os.Open(fileLocation); !os.IsNotExist(err) {
 			continue
 		}
 
-		list, err := wiktionaryScraper(d.wordUrls...)
+		wordList, err := wiktionaryScraper(urls...)
 		if err != nil {
 			return err
+		}
+
+		list := make([][]string, 0, len(wordList))
+		for s, w := range wordList {
+			list = append(list, []string{s, CleanUpWord(strings.ReplaceAll(w.Type.String(), "lib.", ""))})
 		}
 
 		file, err := os.Create(fileLocation)
@@ -180,7 +192,18 @@ func buildListSet1() error {
 		}
 		defer file.Close() //nolint
 
-		if _, err := file.Write([]byte(strings.Join(list, "\n"))); err != nil {
+		buffer := new(bytes.Buffer)
+
+		if err := csv.NewWriter(buffer).WriteAll(list); err != nil {
+			return err
+		}
+
+		data := make([]byte, buffer.Len())
+		if _, err := buffer.Read(data); err != nil {
+			return err
+		}
+
+		if _, err := file.Write(data); err != nil {
 			return err
 		}
 	}
