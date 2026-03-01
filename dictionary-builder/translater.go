@@ -28,9 +28,15 @@ type translateResponse struct {
 
 var httpClient = &http.Client{
 	Timeout: 2 * time.Minute,
+	Transport: &http.Transport{
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 100,
+		MaxConnsPerHost:     100,
+		IdleConnTimeout:     90 * time.Second,
+	},
 }
 
-func TranslateWords(words []Word, fromLang, toLang language.Tag) ([]string, error) {
+func TranslateWords(words []*DictNode, fromLang, toLang language.Tag) ([]string, error) {
 	const batchSize = 100
 	results := make([]string, len(words))
 	totalBatches := (len(words) + batchSize - 1) / batchSize
@@ -47,7 +53,7 @@ func TranslateWords(words []Word, fromLang, toLang language.Tag) ([]string, erro
 		batch := words[i:end]
 
 		wg.Add(1)
-		go func(start int, batch []Word) {
+		go func(start int, batch []*DictNode) {
 			defer wg.Done()
 			sem <- struct{}{}        // acquire
 			defer func() { <-sem }() // release
@@ -90,7 +96,7 @@ func TranslateWords(words []Word, fromLang, toLang language.Tag) ([]string, erro
 	return results, nil
 }
 
-func translateBatch(words []Word, fromLang, toLang language.Tag) ([]string, error) {
+func translateBatch(words []*DictNode, fromLang, toLang language.Tag) ([]string, error) {
 	texts := make([]string, len(words))
 	for i, w := range words {
 		texts[i] = w.W

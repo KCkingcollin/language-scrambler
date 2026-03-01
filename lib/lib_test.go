@@ -17,16 +17,22 @@ func TestBuildTree(t *testing.T) {
 		t.FailNow()
 	}
 
-	wordsMap := make(map[string]Word)
+	wordsMap := func() TranslationDictionary {
+		dict := make(TranslationDictionary)
+		for _, l := range SupportedLangs {
+			dict[l.Tag] = make(Dictionary)
+		}
+		return dict
+	}()
 	for _, w := range words {
-		wordsMap[w.W] = w
+		wordsMap[language.English][CleanUpWord(w.W)] = w
 	}
 	fmt.Println("size of", language.English.String(), "list:", len(wordsMap))
 
 	var b bool
 	searchTree := BuildSearchTree(wordsMap)
 
-	for s := range wordsMap {
+	for s := range wordsMap[language.English] {
 		for _, r := range s {
 			searchTree, b = searchTree.SearchStep(r)
 			if !b {
@@ -44,7 +50,7 @@ func TestBuildDictionary(t *testing.T) {
 		fmt.Println(err)
 		t.FailNow()
 	}
-	err := BuildDictionary(GetBase(language.German), GetBase(language.English), text)
+	err := BuildDictionary(text)
 	if err != nil {
 		fmt.Println(err)
 		t.FailNow()

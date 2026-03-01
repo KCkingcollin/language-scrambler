@@ -8,7 +8,7 @@ func ConvertText(opts ScramOpts, file *os.File) ([]byte, error) {
 		return nil, err
 	}
 	text := string(buffer)
-	if err := BuildDictionary(opts.List, opts.Lang, text); err != nil {
+	if err := BuildDictionary(text); err != nil {
 		return nil, err
 	}
 	reqFrequency := opts.Difficulty*float32(MaxFrequency)
@@ -26,11 +26,11 @@ func ConvertText(opts ScramOpts, file *os.File) ([]byte, error) {
 			}
 			node = newNode
 		}
-		w, ok := LoadedDictionary[text[i:j]]
+		w, ok := LoadedDictionary[opts.List][text[i:j]]
 		if ok && w.Frequency > int(reqFrequency) {
 			startText := text[:i]
 			endText := text[j+1:]
-			text = startText+w.Translation+endText
+			text = startText+w.Translations[opts.Lang].W+endText
 		}
 		reqFrequency+=incrementAmount
 	}

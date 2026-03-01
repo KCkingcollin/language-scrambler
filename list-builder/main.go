@@ -11,7 +11,6 @@ import (
 	"path"
 	"reflect"
 	"slices"
-	"strings"
 
 	"golang.org/x/net/html"
 	"golang.org/x/text/language"
@@ -80,8 +79,8 @@ func findListNodesWiki(nextPage *string, doc *html.Node) (string, *html.Node) {
 	return *nextPage, doc
 }
 
-func wiktionaryScraper(urls ...string) (map[string]Word, error) {
-	list := make(map[string]Word)
+func wiktionaryScraper(lang language.Tag, urls ...string) (Dictionary, error) {
+	list := make(Dictionary)
 	client := &http.Client{}
 	wordCount := make([]int, len(urls))
 	for i, nextPage := range urls {
@@ -124,9 +123,9 @@ func wiktionaryScraper(urls ...string) (map[string]Word, error) {
 						if node.Type == html.ElementNode && node.Data == "ul" {
 							for li := range node.ChildNodes() {
 								if li.Type == html.ElementNode {
-									word := Word{W: li.FirstChild.FirstChild.Data, Type: wordType}
+									word := &DictNode{W: li.FirstChild.FirstChild.Data, Lang: lang, Type: wordType}
 									if CleanUpWord(word.W) != "" {
-										list[word.W] = word
+										list[CleanUpWord(word.W)] = word
 									}
 								}
 							}
@@ -176,14 +175,14 @@ func buildListSet1() error {
 			continue
 		}
 
-		wordList, err := wiktionaryScraper(urls...)
+		wordList, err := wiktionaryScraper(langTag, urls...)
 		if err != nil {
 			return err
 		}
 
 		list := make([][]string, 0, len(wordList))
-		for s, w := range wordList {
-			list = append(list, []string{s, CleanUpWord(strings.ReplaceAll(w.Type.String(), "lib.", ""))})
+		for _, w := range wordList {
+			list = append(list, []string{w.W, w.GetType()})
 		}
 
 		file, err := os.Create(fileLocation)

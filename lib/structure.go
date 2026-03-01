@@ -10,8 +10,8 @@ import (
 type (
 	// Text source language will be detected
 	ScramOpts struct{
-		List language.Base
-		Lang language.Base
+		List language.Tag
+		Lang language.Tag
 		// should increase the complexity and replace less common words more often as the difficulty is raised
 		Difficulty float32
 		// what the difficulty should be by the end of the text
@@ -21,17 +21,18 @@ type (
 	Noun struct{}
 	Verb struct{}
 
-	Word struct {
+	DictNode struct {
 		W string
-		Translation string
+		Translations map[language.Tag]*DictNode
 		Frequency int
 		Type reflect.Type
+		Lang language.Tag
 	}
 
 	RuneNode struct {
 		Root *RuneNode
 		Next map[rune]*RuneNode
-		W *Word
+		DNode *DictNode
 	}
 
 	Lang struct {
@@ -40,7 +41,9 @@ type (
 	}
 
 	// string should be a cleaned version, where as the W variable in Word should be the original
-	Dictionary map[string]Word
+	Dictionary map[string]*DictNode
+
+	TranslationDictionary map[language.Tag]Dictionary
 )
 
 var (
@@ -67,5 +70,16 @@ func ParseWordType(s string) reflect.Type {
 		return reflect.TypeFor[Verb]()
 	default:
 		return nil
+	}
+}
+
+func (node *DictNode) GetType() string {
+	switch node.Type {
+	case reflect.TypeFor[Noun]():
+		return "noun"
+	case reflect.TypeFor[Verb]():
+		return "verb"
+	default:
+		return ""
 	}
 }

@@ -1,11 +1,11 @@
 package main
 
 import (
-	"bytes"
 	"encoding/csv"
 	"fmt"
 	. "langscram-lib" //nolint
 	"log"
+	"maps"
 	"os"
 	"path"
 	"time"
@@ -13,124 +13,184 @@ import (
 	"golang.org/x/text/language"
 )
 
-func BuildConverter(fromList language.Tag) ([]byte, error) {
-	wordsMap, err := LoadList(fromList)
-	if err != nil {
-		return nil, err
+func SaveConverter(tDict TranslationDictionary, converterPath string, languages []language.Tag) error {
+	header := make([]string, len(languages)+1)
+	for _, toLang := range languages {
+		header = append(header, toLang.String())
+	}
+	header = append(header, "type")
+
+	if len(languages) < 1 {
+		return fmt.Errorf("no languages provided")
 	}
 
-	words := make([]Word, 0, len(wordsMap))
-	for _, w := range wordsMap {
-		words = append(words, w)
-	}
-
-	header := []string{fromList.String()}
-	targetLangs := make([]language.Tag, 0, len(SupportedLangs)-1)
-
-	for _, toLang := range SupportedLangs {
-		if toLang.Tag == fromList {
-			continue
-		}
-		header = append(header, toLang.Tag.String())
-		targetLangs = append(targetLangs, toLang.Tag)
-	}
-
-	fmt.Println("translating", len(words), "words to", len(targetLangs), "languages")
-
-	allTranslations := make([]map[language.Tag]string, len(words))
-
-	for _, toLang := range targetLangs {
-		timer := time.Now()
-
-		translations, err := TranslateWords(words, fromList, toLang)
-		if err != nil {
-			return nil, err
-		}
-
-		if len(translations) != len(words) {
-			return nil, fmt.Errorf(
-				"translation length mismatch: got %d, expected %d",
-				len(translations),
-				len(words),
-			)
-		}
-
-		for i := range words {
-			if allTranslations[i] == nil {
-				allTranslations[i] = make(map[language.Tag]string, len(targetLangs))
-			}
-			allTranslations[i][toLang] = translations[i]
-		}
-
-		log.Println(
-			"translated to",
-			toLang.String()+".",
-			fmt.Sprintf("took %s.", time.Since(timer)),
-		)
-	}
-
-	converter := make([][]string, 0, len(words)+1)
+	converter := make([][]string, 0, len(tDict[languages[0]])+1)
 	converter = append(converter, header)
 
-	var missingWords int
+	for _, w := range tDict[languages[0]] {
+		line := make([]string, len(header))
 
-	for i, word := range words {
-		row := make([]string, 0, len(header))
-		row = append(row, word.W)
-
-		for _, lang := range targetLangs {
-			translation := allTranslations[i][lang]
-			if translation == "" {
-				missingWords++
+		complete := true
+		for _, l := range languages {
+			if _, ok := w.Translations[l]; !ok {
+				log.Println("skipping:", w.W, "due to insufficient information")
+				complete = false
+				break
 			}
-			row = append(row, translation)
+		}
+		if !complete {
+			continue
 		}
 
-		converter = append(converter, row)
+		for i, l := range languages {
+			word := w.Translations[l]
+			line[i] = word.W
+		}
+
+		line[len(line)-1] = w.GetType()
+
+		converter = append(converter, line)
 	}
 
-	fmt.Println("we're missing", missingWords, "words")
+	file, err := os.Create(converterPath + ".tmp")
+	if err != nil {
+		return fmt.Errorf("making file: %w", err)
+	}
+	defer file.Close() //nolint
 
-	var buffer bytes.Buffer
-	writer := csv.NewWriter(&buffer)
+	writer := csv.NewWriter(file)
 
 	if err := writer.WriteAll(converter); err != nil {
-		return nil, err
+		return err
 	}
 
 	writer.Flush()
 	if err := writer.Error(); err != nil {
-		return nil, err
+		return err
 	}
 
-	return buffer.Bytes(), nil
+	err = os.Rename(converterPath+".tmp", converterPath)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func BuildConverter(tDict TranslationDictionary, converterPath string) error {
+	const bulkSize = 1000
+
+	var biggestLang language.Tag
+	var maxListSize int
+	for l, c := range tDict {
+		if len(c) > maxListSize {
+			biggestLang = l
+			maxListSize = len(c)
+		}
+	}
+
+	languages := []language.Tag{biggestLang}
+	for _, toLang := range SupportedLangs {
+		if toLang.Tag == biggestLang {
+			continue
+		}
+		languages = append(languages, toLang.Tag)
+	}
+
+	wordsMap := make(map[language.Tag][]*DictNode)
+	for _, d := range tDict {
+		for _, w := range d {
+			if w.Translations == nil {
+				wordsMap[w.Lang] = append(wordsMap[w.Lang], w)
+			}
+		}
+	}
+
+	fmt.Println("translating at least", maxListSize, "words to", len(SupportedLangs), "languages")
+
+	for _, toLang := range languages {
+		for fromLang, words := range wordsMap {
+			timer := time.Now()
+
+			for i := 0; i < len(words); i += bulkSize {
+				buffer := words[i:min(i+bulkSize, len(words))]
+
+				var toTranslate []*DictNode
+				for _, w := range buffer {
+					if w.Translations == nil {
+						toTranslate = append(toTranslate, w)
+						continue
+					}
+					if _, ok := w.Translations[toLang]; !ok {
+						toTranslate = append(toTranslate, w)
+					}
+				}
+
+				if len(toTranslate) == 0 {
+					continue
+				}
+
+				translations, err := TranslateWords(toTranslate, fromLang, toLang)
+				if err != nil {
+					return err
+				}
+
+				if len(translations) != len(toTranslate) {
+					return fmt.Errorf(
+						"translation length mismatch: got %d, expected %d",
+						len(translations),
+						len(toTranslate),
+					)
+				}
+
+				for i, w := range toTranslate {
+					translation := &DictNode{W: translations[i], Lang: toLang, Type: w.Type}
+					tDict.AddTranslation(w, translation)
+				}
+
+				// I know, I know, its slow, but its better than losing hours of translation rendering
+				err = SaveConverter(tDict, converterPath, languages)
+				if err != nil {
+					return err
+				}
+
+			}
+
+			log.Println(
+				"translated to",
+				toLang.String()+".",
+				fmt.Sprintf("took %s.", time.Since(timer)),
+			)
+		}
+	}
+
+	return nil
 }
 
 func main() {
 	for _, lang := range SupportedLangs {
-		converterPath := path.Join(DictionaryPath, lang.Tag.String()+"-"+ConverterDictionaryName+".csv")
-		_, err := os.ReadFile(converterPath)
+		list, err := LoadList(lang.Tag)
 		if err != nil {
-			if !os.IsNotExist(err) {
-				log.Println(err)
-				continue
-			}
+			log.Fatalln(err)
+		}
+		maps.Copy(LoadedDictionary[lang.Tag], list)
+	}
 
-			data, err := BuildConverter(lang.Tag)
-			if err != nil {
-				log.Fatalln("making conversion list:", err)
-			}
-
-			file, err := os.Create(converterPath)
-			if err != nil {
-				log.Fatalln("making file:", err)
-			}
-			defer file.Close() //nolint
-
-			if _, err := file.Write(data); err != nil {
-				log.Fatalln("writing conversion list: ", err)
-			}
+	converterPath := path.Join(DictionaryPath, ConverterDictionaryName+".csv")
+	data, err := os.ReadFile(converterPath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Fatalln(err)
+		}
+	} else {
+		LoadedDictionary, err = ReadConverter(data)
+		if err != nil {
+			log.Fatalln(err)
 		}
 	}
-}
 
+	err = BuildConverter(LoadedDictionary, converterPath)
+	if err != nil {
+		log.Fatalln("making conversion list:", err)
+	}
+}
