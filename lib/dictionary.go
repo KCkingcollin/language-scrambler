@@ -33,47 +33,40 @@ var (
 	MaxFrequency   int
 )
 
-// adds the translation to the translations map in the dictionaries node, as well as sets the translation map for the translation node as well, updates the word and translation nodes accordingly
-//
-// YOUR NODES ARE NOT SAFE HERE
-func (dict TranslationDictionary) AddTranslation(word, translation *DictNode) {
-	var translations map[language.Tag]*DictNode
-
-	wordKey := CleanUpWord(word.W)
-	translationKey := CleanUpWord(translation.W)
-
-	wordNode, wordOk := dict[word.Lang][wordKey]
-	translationNode, translationOk := dict[translation.Lang][translationKey]
-
-	switch {
-	case wordOk && wordNode.Translations != nil:
-		translations = wordNode.Translations
-	case translationOk && translationNode.Translations != nil:
-		translations = translationNode.Translations
-	default:
-		translations = make(map[language.Tag]*DictNode)
+// any words of the same language will get kicked out for the word after it in the list.
+func MergeTranslations(nodes ...*DictNode) map[language.Tag]*DictNode {
+	translations := make(map[language.Tag]*DictNode)
+	for _, node := range nodes {
+		t := node.Translations
+		for l, d := range t {
+			translations[l] = d
+			d.Translations = translations
+		}
+		node.Translations = translations
+		translations[node.Lang] = node
 	}
+	return translations
+}
+
+// Adds the translation to the translations map in the dictionaries node, as well as sets the translation map for the translation node as well, updates the word and translation nodes accordingly
+func (dict TranslationDictionary) AddTranslation(word, translation *DictNode) {
+	wordNode, wordOk := dict[word.Lang][word.ID]
+	translationNode, translationOk := dict[translation.Lang][translation.ID]
+
+	translations := MergeTranslations(wordNode, translationNode)
 
 	if !translationOk {
-		translationNode = &DictNode{Lang: translation.Lang, W: translation.W, Translations: translations, Type: translation.Type}
-	} else {
-		translationNode.Translations = translations
+		translationNode = &DictNode{ID: translation.ID, Lang: translation.Lang, W: translation.W, Translations: translations, Type: translation.Type}
+		translations[translationNode.Lang] = translationNode
 	}
 
 	if !wordOk {
-		wordNode = &DictNode{Lang: word.Lang, W: word.W, Translations: translations, Type: word.Type}
-	} else {
-		wordNode.Translations = translations
+		wordNode = &DictNode{ID: translation.ID, Lang: word.Lang, W: word.W, Translations: translations, Type: word.Type}
+		translations[wordNode.Lang] = wordNode
 	}
 
-	translations[wordNode.Lang] = wordNode
-	translations[translationNode.Lang] = translationNode
-
-	dict[word.Lang][wordKey] = wordNode
-	dict[translation.Lang][translationKey] = translationNode
-
-	*word = *wordNode
-	*translation = *translationNode
+	dict[word.Lang][word.ID] = wordNode
+	dict[translation.Lang][translation.ID] = translationNode
 }
 
 func GetBase(lang language.Tag) language.Base {
@@ -120,14 +113,30 @@ func LoadList(fromLang language.Tag) (Dictionary, error) {
 		if len(line) < 2 {
 			return nil, fmt.Errorf("only one column? List may be corrupted")
 		}
-		word := &DictNode{W: line[0], Lang: fromLang, Type: ParseWordType(line[1])}
-		words[CleanUpWord(line[0])] = word
+
+		typeCell := strings.TrimSpace(line[1])
+		if typeCell == "" {
+			return nil, fmt.Errorf("no type? List may be corrupted")
+		}
+
+		w := strings.TrimSpace(line[0])
+		if w == "" {
+			return nil, fmt.Errorf("word is blank? List may be corrupted")
+		}
+
+		word := &DictNode{ID: CleanUpWord(w), W: w, Lang: fromLang, Type: ParseWordType(typeCell)}
+		words[word.ID] = word
 	}
 
 	return words, nil
 }
 
 func ReadConverter(data []byte) (TranslationDictionary, error) {
+	dict := make(TranslationDictionary)
+	for _, l := range SupportedLangs {
+		dict[l.Tag] = make(Dictionary)
+	}
+
 	converterReader := csv.NewReader(bytes.NewReader(data))
 	converter, err := converterReader.ReadAll()
 	if err != nil {
@@ -142,18 +151,32 @@ func ReadConverter(data []byte) (TranslationDictionary, error) {
 		}
 		langIndexs = append(langIndexs, langTag)
 	}
-
-	dict := make(TranslationDictionary)
-	for _, l := range SupportedLangs {
-		dict[l.Tag] = make(Dictionary)
+	if len(converter) == 0 || len(converter[0]) < 2 {
+		return dict, fmt.Errorf("read converter: %w", ErrEmptyConverter)
 	}
 
-	// This is syntactic, not semantic
 	for _, line := range converter[1:] {
-		t := ParseWordType(line[len(line)-1])
-		word := &DictNode{W: line[0], Lang: langIndexs[0], Type: t}
+		typeCell := strings.TrimSpace(line[len(line)-1])
+		if typeCell == "" {
+			continue
+		}
+		t := ParseWordType(typeCell)
+
+		var word *DictNode
+		if line[0] != "" {
+			word = &DictNode{ID: CleanUpWord(line[0]), W: line[0], Lang: langIndexs[0], Type: t}
+		}
+
 		for i, s := range line[1 : len(line)-1] {
-			translation := &DictNode{W: s, Lang: langIndexs[i+1], Type: t}
+			if s == "" {
+				continue
+			}
+			if word == nil {
+				word = &DictNode{ID: CleanUpWord(s), W: s, Lang: langIndexs[i+1], Type: t}
+				continue
+			}
+
+			translation := &DictNode{ID: CleanUpWord(s), W: s, Lang: langIndexs[i+1], Type: t}
 			dict.AddTranslation(word, translation)
 			word = translation
 		}

@@ -1,6 +1,11 @@
 package lib
 
-import "runtime"
+import (
+	"errors"
+	"runtime"
+)
+
+var ErrEmptyConverter = errors.New("converter file is empty or missing header")
 
 func CallerName() string {
 	pc, _, _, _ := runtime.Caller(2)

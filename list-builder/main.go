@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"path"
-	"reflect"
 	"slices"
 
 	"golang.org/x/net/html"
@@ -84,11 +83,11 @@ func wiktionaryScraper(lang language.Tag, urls ...string) (Dictionary, error) {
 	client := &http.Client{}
 	wordCount := make([]int, len(urls))
 	for i, nextPage := range urls {
-		var wordType reflect.Type
+		var wordType WordType
 		if i < 1 {
-			wordType = reflect.TypeFor[Verb]()
+			wordType = WordTypeVerb
 		} else {
-			wordType = reflect.TypeFor[Noun]()
+			wordType = WordTypeNoun
 		}
 		var count int
 		for nextPage != "" {
@@ -124,8 +123,9 @@ func wiktionaryScraper(lang language.Tag, urls ...string) (Dictionary, error) {
 							for li := range node.ChildNodes() {
 								if li.Type == html.ElementNode {
 									word := &DictNode{W: li.FirstChild.FirstChild.Data, Lang: lang, Type: wordType}
-									if CleanUpWord(word.W) != "" {
-										list[CleanUpWord(word.W)] = word
+									s := CleanUpWord(word.W)
+									if s != "" {
+										list[s] = word
 									}
 								}
 							}

@@ -1,10 +1,17 @@
 package lib
 
 import (
-	"reflect"
 	"strings"
 
 	"golang.org/x/text/language"
+)
+
+type WordType uint8
+
+const (
+	WordTypeUnknown WordType = iota
+	WordTypeNoun
+	WordTypeVerb
 )
 
 type (
@@ -18,14 +25,13 @@ type (
 		DifGradient float32
 	}
 
-	Noun struct{}
-	Verb struct{}
-
 	DictNode struct {
+		ID string
 		W string
+		// NOT a tree structure, DO NOT traverse
 		Translations map[language.Tag]*DictNode
 		Frequency int
-		Type reflect.Type
+		Type WordType
 		Lang language.Tag
 	}
 
@@ -47,6 +53,7 @@ type (
 )
 
 var (
+	// Do NOT mutate
 	SupportedLangs = []Lang{
 		{"English", language.English},
 		{"Spanish", language.Spanish},
@@ -62,22 +69,24 @@ var (
 	}
 )
 
-func ParseWordType(s string) reflect.Type {
+func ParseWordType(s string) WordType {
+	s = strings.ToLower(s)
+
 	switch {
 	case strings.Contains(s, "noun"):
-		return reflect.TypeFor[Noun]()
+		return WordTypeNoun
 	case strings.Contains(s, "verb"):
-		return reflect.TypeFor[Verb]()
+		return WordTypeVerb
 	default:
-		return nil
+		return WordTypeUnknown
 	}
 }
 
 func (node *DictNode) GetType() string {
 	switch node.Type {
-	case reflect.TypeFor[Noun]():
+	case WordTypeNoun:
 		return "noun"
-	case reflect.TypeFor[Verb]():
+	case WordTypeVerb:
 		return "verb"
 	default:
 		return ""

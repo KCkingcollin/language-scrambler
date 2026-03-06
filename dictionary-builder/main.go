@@ -1,56 +1,84 @@
 package main
 
 import (
+	"compress/gzip"
 	"encoding/csv"
+	"errors"
 	"fmt"
+	"io"
 	. "langscram-lib" //nolint
 	"log"
-	"maps"
 	"os"
 	"path"
+	"slices"
+	"sync"
 	"time"
 
 	"golang.org/x/text/language"
 )
 
+var dictMu sync.RWMutex
+
 func SaveConverter(tDict TranslationDictionary, converterPath string, languages []language.Tag) error {
-	header := make([]string, len(languages)+1)
-	for _, toLang := range languages {
-		header = append(header, toLang.String())
+	seen := make(map[*DictNode]bool)
+	clusters := make([]map[language.Tag]*DictNode, 0)
+
+	dictMu.RLock()
+	for _, dict := range tDict {
+		for _, w := range dict {
+			if w.Translations == nil {
+				continue
+			}
+
+			if seen[w] {
+				continue
+			}
+
+			for _, node := range w.Translations {
+				seen[node] = true
+			}
+
+			clusters = append(clusters, w.Translations)
+		}
 	}
-	header = append(header, "type")
+	dictMu.RUnlock()
 
 	if len(languages) < 1 {
 		return fmt.Errorf("no languages provided")
 	}
 
-	converter := make([][]string, 0, len(tDict[languages[0]])+1)
+	header := make([]string, 0, len(languages)+1)
+	for _, toLang := range languages {
+		header = append(header, toLang.String())
+	}
+	header = append(header, "type")
+
+	converter := make([][]string, 0, len(clusters)+1)
 	converter = append(converter, header)
 
-	for _, w := range tDict[languages[0]] {
+	dictMu.RLock()
+	for _, cluster := range clusters {
 		line := make([]string, len(header))
 
-		complete := true
-		for _, l := range languages {
-			if _, ok := w.Translations[l]; !ok {
-				log.Println("skipping:", w.W, "due to insufficient information")
-				complete = false
-				break
-			}
+		var word *DictNode
+		for _, node := range cluster {
+			word = node
+			break
 		}
-		if !complete {
+		if word == nil {
 			continue
 		}
 
 		for i, l := range languages {
-			word := w.Translations[l]
-			line[i] = word.W
+			if node, ok := cluster[l]; ok {
+				line[i] = node.W
+			}
 		}
-
-		line[len(line)-1] = w.GetType()
+		line[len(line)-1] = word.GetType()
 
 		converter = append(converter, line)
 	}
+	dictMu.RUnlock()
 
 	file, err := os.Create(converterPath + ".tmp")
 	if err != nil {
@@ -58,7 +86,8 @@ func SaveConverter(tDict TranslationDictionary, converterPath string, languages 
 	}
 	defer file.Close() //nolint
 
-	writer := csv.NewWriter(file)
+	gzFile := gzip.NewWriter(file)
+	writer := csv.NewWriter(gzFile)
 
 	if err := writer.WriteAll(converter); err != nil {
 		return err
@@ -66,6 +95,10 @@ func SaveConverter(tDict TranslationDictionary, converterPath string, languages 
 
 	writer.Flush()
 	if err := writer.Error(); err != nil {
+		return err
+	}
+
+	if err := gzFile.Close(); err != nil {
 		return err
 	}
 
@@ -78,40 +111,59 @@ func SaveConverter(tDict TranslationDictionary, converterPath string, languages 
 }
 
 func BuildConverter(tDict TranslationDictionary, converterPath string) error {
-	const bulkSize = 1000
-
-	var biggestLang language.Tag
-	var maxListSize int
-	for l, c := range tDict {
-		if len(c) > maxListSize {
-			biggestLang = l
-			maxListSize = len(c)
-		}
+	canTranslate, err := GetTranslationCapabilities()
+	if err != nil {
+		return err
 	}
 
-	languages := []language.Tag{biggestLang}
+	var languages = make([]language.Tag, 0, len(SupportedLangs))
 	for _, toLang := range SupportedLangs {
-		if toLang.Tag == biggestLang {
-			continue
-		}
 		languages = append(languages, toLang.Tag)
 	}
+	slices.SortFunc(languages, func(a, b language.Tag) int {
+		return len(tDict[b]) - len(tDict[a])
+	})
 
+	const bulkSize = 1000
+
+	var wg sync.WaitGroup
+	saveQueue := make(chan struct{}, 1)
+
+	wg.Go(func() {
+		for range saveQueue {
+			err := SaveConverter(tDict, converterPath, languages)
+			if err != nil {
+				log.Println("Save failed:", err)
+			}
+		}
+	})
+
+	var amountOfWords int
 	wordsMap := make(map[language.Tag][]*DictNode)
 	for _, d := range tDict {
 		for _, w := range d {
 			if w.Translations == nil {
 				wordsMap[w.Lang] = append(wordsMap[w.Lang], w)
+				amountOfWords++
 			}
 		}
 	}
 
-	fmt.Println("translating at least", maxListSize, "words to", len(SupportedLangs), "languages")
+	fmt.Println("translating roughly", amountOfWords, "words to", len(SupportedLangs), "languages")
 
 	for _, toLang := range languages {
 		for fromLang, words := range wordsMap {
-			timer := time.Now()
+			if len(words) == 0 {
+				continue
+			}
 
+			if !canTranslate[fromLang][toLang] {
+				continue
+			}
+
+			fmt.Println("translating", len(words), "words from", fromLang.String(), "to", toLang.String())
+
+			timer := time.Now()
 			for i := 0; i < len(words); i += bulkSize {
 				buffer := words[i:min(i+bulkSize, len(words))]
 
@@ -143,18 +195,21 @@ func BuildConverter(tDict TranslationDictionary, converterPath string) error {
 					)
 				}
 
+				dictMu.Lock()
 				for i, w := range toTranslate {
-					translation := &DictNode{W: translations[i], Lang: toLang, Type: w.Type}
+					translation := &DictNode{ID: CleanUpWord(translations[i]), W: translations[i], Lang: toLang, Type: w.Type}
 					tDict.AddTranslation(w, translation)
 				}
+				dictMu.Unlock()
 
-				// I know, I know, its slow, but its better than losing hours of translation rendering
-				err = SaveConverter(tDict, converterPath, languages)
-				if err != nil {
-					return err
+				select {
+				case saveQueue <- struct{}{}:
+				default:
 				}
-
+				progress := float32(min(i+bulkSize, len(words))) / float32(len(words)) * 100
+				fmt.Printf("\r\033[K%.1f%%", progress)
 			}
+			fmt.Println()
 
 			log.Println(
 				"translated to",
@@ -164,28 +219,60 @@ func BuildConverter(tDict TranslationDictionary, converterPath string) error {
 		}
 	}
 
+	select {
+	case saveQueue <- struct{}{}:
+	default:
+	}
+	close(saveQueue)
+	wg.Wait()
+
 	return nil
 }
 
 func main() {
-	for _, lang := range SupportedLangs {
-		list, err := LoadList(lang.Tag)
-		if err != nil {
-			log.Fatalln(err)
-		}
-		maps.Copy(LoadedDictionary[lang.Tag], list)
-	}
-
-	converterPath := path.Join(DictionaryPath, ConverterDictionaryName+".csv")
-	data, err := os.ReadFile(converterPath)
+	converterPath := path.Join(DictionaryPath, ConverterDictionaryName+".csv.gz")
+	file, err := os.Open(converterPath)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			log.Fatalln(err)
 		}
 	} else {
-		LoadedDictionary, err = ReadConverter(data)
+		defer file.Close() //nolint
+
+		gzFile, err := gzip.NewReader(file)
 		if err != nil {
 			log.Fatalln(err)
+		}
+		defer gzFile.Close() //nolint
+
+		data, err := io.ReadAll(gzFile)
+		if err != nil {
+			log.Fatalln(err)
+		}
+
+		LoadedDictionary, err = ReadConverter(data)
+		if err != nil && !errors.Is(err, ErrEmptyConverter) {
+			log.Fatalln(err)
+		}
+
+		for _, dict := range LoadedDictionary {
+			for key, node := range dict {
+				if CleanUpWord(node.W) != key {
+					panic("identity drift detected")
+				}
+			}
+		}
+	}
+
+	for _, lang := range SupportedLangs {
+		list, err := LoadList(lang.Tag)
+		if err != nil {
+			log.Fatalln(err)
+		}
+		for s, w := range list {
+			if _, ok := LoadedDictionary[w.Lang][s]; !ok {
+				LoadedDictionary[w.Lang][s] = w
+			}
 		}
 	}
 
