@@ -158,6 +158,7 @@ func BuildConverter(tDict TranslationDictionary, converterPath string) error {
 			}
 
 			if !canTranslate[fromLang][toLang] {
+				log.Printf("%s to %s is not supported", fromLang.String(), toLang.String())
 				continue
 			}
 

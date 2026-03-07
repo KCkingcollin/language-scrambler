@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -84,6 +85,7 @@ func GetTranslationCapabilities() (map[language.Tag]map[language.Tag]bool, error
 		}
 
 		for _, t := range l.Targets {
+			t = strings.SplitN(t, "-", 2)[0]
 			to, err := language.Parse(t)
 			if err != nil {
 				continue
@@ -111,7 +113,7 @@ func TranslateWords(words []*DictNode, fromLang, toLang language.Tag) ([]string,
 	var wg sync.WaitGroup
 	errCh := make(chan error, 1)
 
-	const maxWorkers = 4
+	maxWorkers := runtime.NumCPU()
 
 	sem := make(chan struct{}, maxWorkers)
 	for i := 0; i < len(words); i += batchSize {

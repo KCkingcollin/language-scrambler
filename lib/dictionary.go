@@ -33,18 +33,34 @@ var (
 	MaxFrequency   int
 )
 
-// any words of the same language will get kicked out for the word after it in the list.
 func MergeTranslations(nodes ...*DictNode) map[language.Tag]*DictNode {
 	translations := make(map[language.Tag]*DictNode)
 	for _, node := range nodes {
-		t := node.Translations
-		for l, d := range t {
-			translations[l] = d
-			d.Translations = translations
+		if node == nil {
+			continue
 		}
-		node.Translations = translations
-		translations[node.Lang] = node
+		if node.Translations == nil {
+			node.Translations = translations
+			continue
+		}
+		for l, d := range node.Translations {
+			if _, ok := translations[l]; !ok {
+				translations[l] = d
+				d.Translations = translations
+			}
+		}
 	}
+
+	for _, node := range nodes {
+        if node == nil {
+            continue
+        }
+        if _, ok := translations[node.Lang]; ok {
+            continue
+        }
+        translations[node.Lang] = node
+	}
+
 	return translations
 }
 
@@ -53,17 +69,15 @@ func (dict TranslationDictionary) AddTranslation(word, translation *DictNode) {
 	wordNode, wordOk := dict[word.Lang][word.ID]
 	translationNode, translationOk := dict[translation.Lang][translation.ID]
 
-	translations := MergeTranslations(wordNode, translationNode)
-
 	if !translationOk {
-		translationNode = &DictNode{ID: translation.ID, Lang: translation.Lang, W: translation.W, Translations: translations, Type: translation.Type}
-		translations[translationNode.Lang] = translationNode
+		translationNode = &DictNode{ID: translation.ID, Lang: translation.Lang, W: translation.W, Type: translation.Type}
 	}
 
 	if !wordOk {
-		wordNode = &DictNode{ID: translation.ID, Lang: word.Lang, W: word.W, Translations: translations, Type: word.Type}
-		translations[wordNode.Lang] = wordNode
+		wordNode = &DictNode{ID: translation.ID, Lang: word.Lang, W: word.W, Type: word.Type}
 	}
+
+	MergeTranslations(wordNode, translationNode)
 
 	dict[word.Lang][word.ID] = wordNode
 	dict[translation.Lang][translation.ID] = translationNode
@@ -140,14 +154,14 @@ func ReadConverter(data []byte) (TranslationDictionary, error) {
 	converterReader := csv.NewReader(bytes.NewReader(data))
 	converter, err := converterReader.ReadAll()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w\n\nfile data: \n%s", err, string(data))
 	}
 
 	var langIndexs []language.Tag
 	for _, lang := range converter[0][:len(converter[0])-1] {
 		langTag, err := language.Parse(lang)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("getting tag %s: %w", lang, err)
 		}
 		langIndexs = append(langIndexs, langTag)
 	}
