@@ -33,6 +33,10 @@ var (
 	MaxFrequency   int
 )
 
+// If the translation maps have no similarities at all then nothing is done to them
+// If a translation map has only similar nodes to another then they are combined into one shared translation map
+// If a pair of translation maps contain at least 1 similarity and at least 1 difference then any empty key/values will be filled with each others non empty key/values but remain separate
+// As a special case, if each translation map can be combined non-destructively then they will be combined into one shared translation map
 func MergeTranslations(nodes ...*DictNode) map[language.Tag]*DictNode {
 	translations := make(map[language.Tag]*DictNode)
 	for _, node := range nodes {
@@ -52,13 +56,13 @@ func MergeTranslations(nodes ...*DictNode) map[language.Tag]*DictNode {
 	}
 
 	for _, node := range nodes {
-        if node == nil {
-            continue
-        }
-        if _, ok := translations[node.Lang]; ok {
-            continue
-        }
-        translations[node.Lang] = node
+		if node == nil {
+			continue
+		}
+		if _, ok := translations[node.Lang]; ok {
+			continue
+		}
+		translations[node.Lang] = node
 	}
 
 	return translations
@@ -70,17 +74,20 @@ func (dict TranslationDictionary) AddTranslation(word, translation *DictNode) {
 	translationNode, translationOk := dict[translation.Lang][translation.ID]
 
 	if !translationOk {
-		translationNode = &DictNode{ID: translation.ID, Lang: translation.Lang, W: translation.W, Type: translation.Type}
+		translationNode = translation
 	}
 
 	if !wordOk {
-		wordNode = &DictNode{ID: translation.ID, Lang: word.Lang, W: word.W, Type: word.Type}
+		wordNode = word
 	}
 
 	MergeTranslations(wordNode, translationNode)
 
-	dict[word.Lang][word.ID] = wordNode
+	word.Translations = wordNode.Translations
+	translation.Translations = translationNode.Translations
+
 	dict[translation.Lang][translation.ID] = translationNode
+	dict[word.Lang][word.ID] = wordNode
 }
 
 func GetBase(lang language.Tag) language.Base {
@@ -170,29 +177,46 @@ func ReadConverter(data []byte) (TranslationDictionary, error) {
 	}
 
 	for _, line := range converter[1:] {
+		if len(line) < 2 {
+			log.Printf("warning: skipping malformed row with %d columns", len(line))
+			continue
+		}
+		if len(line) != len(langIndexs)+1 {
+			log.Printf("warning: row has %d columns, expected %d", len(line), len(langIndexs)+1)
+		}
+
 		typeCell := strings.TrimSpace(line[len(line)-1])
 		if typeCell == "" {
 			continue
 		}
 		t := ParseWordType(typeCell)
 
-		var word *DictNode
-		if line[0] != "" {
-			word = &DictNode{ID: CleanUpWord(line[0]), W: line[0], Lang: langIndexs[0], Type: t}
-		}
-
+		var nodes []*DictNode
 		for i, s := range line[1 : len(line)-1] {
 			if s == "" {
 				continue
 			}
-			if word == nil {
-				word = &DictNode{ID: CleanUpWord(s), W: s, Lang: langIndexs[i+1], Type: t}
-				continue
+			nodes = append(nodes, &DictNode{
+				ID: CleanUpWord(s), W: s, Lang: langIndexs[i+1], Type: t,
+			})
+		}
+
+		if line[0] != "" {
+			nodes = append([]*DictNode{{ID: CleanUpWord(line[0]), W: line[0], Lang: langIndexs[0], Type: t}}, nodes...)
+		}
+
+		for i := 1; i < len(nodes); i++ {
+			existingWord, wordExists := dict[nodes[0].Lang][nodes[0].ID]
+			existingTrans, transExists := dict[nodes[i].Lang][nodes[i].ID]
+
+			if wordExists {
+				nodes[0] = existingWord
+			}
+			if transExists {
+				nodes[i] = existingTrans
 			}
 
-			translation := &DictNode{ID: CleanUpWord(s), W: s, Lang: langIndexs[i+1], Type: t}
-			dict.AddTranslation(word, translation)
-			word = translation
+			dict.AddTranslation(nodes[0], nodes[i])
 		}
 	}
 

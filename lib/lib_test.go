@@ -1,6 +1,9 @@
 package lib
 
 import (
+	"fmt"
+	"maps"
+	"reflect"
 	"testing"
 
 	"golang.org/x/text/language"
@@ -159,6 +162,364 @@ func TestAddTranslation(t *testing.T) {
 	if _, ok := enNode.Translations[language.Spanish]; !ok {
 		t.Error("Spanish translation not linked")
 	}
+}
+
+func initSets() (map[language.Tag]*DictNode, map[language.Tag]*DictNode) {
+	initSet1 := map[language.Tag]*DictNode{
+		language.English:    {ID: CleanUpWord("torun"), W: "to run", Lang: language.English, Type: WordTypeNoun},
+		language.Spanish:    {ID: CleanUpWord("correr"), W: "correr", Lang: language.Spanish, Type: WordTypeVerb},
+		language.German:     {ID: CleanUpWord("rennen"), W: "rennen", Lang: language.German, Type: WordTypeVerb},
+		language.Japanese:   {ID: CleanUpWord("走る"), W: "走る", Lang: language.Japanese, Type: WordTypeVerb},
+		language.Russian:    {ID: CleanUpWord("бегать"), W: "бегать", Lang: language.Russian, Type: WordTypeVerb},
+		language.Swedish:    {ID: CleanUpWord("springa"), W: "springa", Lang: language.Swedish, Type: WordTypeVerb},
+		language.Portuguese: {ID: CleanUpWord("correr"), W: "correr", Lang: language.Portuguese, Type: WordTypeVerb},
+		language.Dutch:      {ID: CleanUpWord("rennen"), W: "rennen", Lang: language.Dutch, Type: WordTypeVerb},
+		language.Italian:    {ID: CleanUpWord("correre"), W: "correre", Lang: language.Italian, Type: WordTypeVerb},
+		language.French:     {ID: CleanUpWord("courir"), W: "courir", Lang: language.French, Type: WordTypeVerb},
+		language.Chinese:    {ID: CleanUpWord("跑"), W: "跑", Lang: language.Chinese, Type: WordTypeVerb},
+	}
+
+	for _, d := range initSet1 {
+		d.Translations = initSet1
+	}
+
+	initSet2 := map[language.Tag]*DictNode{
+		language.English:    {ID: CleanUpWord("to eat"), W: "to eat", Lang: language.English, Type: WordTypeVerb},
+		language.Spanish:    {ID: CleanUpWord("comer"), W: "comer", Lang: language.Spanish, Type: WordTypeVerb},
+		language.German:     {ID: CleanUpWord("essen"), W: "essen", Lang: language.German, Type: WordTypeVerb},
+		language.Japanese:   {ID: CleanUpWord("食べる"), W: "食べる", Lang: language.Japanese, Type: WordTypeVerb},
+		language.Russian:    {ID: CleanUpWord("есть"), W: "есть", Lang: language.Russian, Type: WordTypeVerb},
+		language.Swedish:    {ID: CleanUpWord("äta"), W: "äta", Lang: language.Swedish, Type: WordTypeNoun},
+		language.Portuguese: {ID: CleanUpWord("comer"), W: "comer", Lang: language.Portuguese, Type: WordTypeVerb},
+		language.Dutch:      {ID: CleanUpWord("eten"), W: "eten", Lang: language.Dutch, Type: WordTypeVerb},
+		language.Italian:    {ID: CleanUpWord("mangiare"), W: "mangiare", Lang: language.Italian, Type: WordTypeVerb},
+		language.French:     {ID: CleanUpWord("manger"), W: "manger", Lang: language.French, Type: WordTypeVerb},
+		language.Chinese:    {ID: CleanUpWord("吃"), W: "吃", Lang: language.Chinese, Type: WordTypeVerb},
+	}
+
+	for _, d := range initSet2 {
+		d.Translations = initSet2
+	}
+
+	return initSet1, initSet2
+}
+
+func TestAddTranslationMerging(t *testing.T) {
+	tests := []struct {
+		name string
+		op   func() error
+	}{
+		{"FullSetTest", addTranslationFullSetTest},
+		{"SplitSetTest", addTranslationSplitSetTest},
+		{"SimilarSetTest", addTranslationSimilarSetTest},
+		{"HalfSimilarSetTest", addTranslationHalfSimilarSetTest},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.op()
+			if err != nil {
+				t.Errorf("%s: %s", tt.name, err)
+			}
+		})
+	}
+}
+
+func addTranslationFullSetTest() error {
+	dict := make(TranslationDictionary)
+	for _, l := range SupportedLangs {
+		dict[l.Tag] = make(Dictionary)
+	}
+
+	set1, set2 := initSets()
+	expectedSet1 := maps.Clone(set1)
+	expectedSet2 := maps.Clone(set2)
+
+	for _, set := range []map[language.Tag]*DictNode{set1, set2} {
+		for _, d := range set {
+			dict[d.Lang][d.ID] = d
+		}
+	}
+
+	var word, translation *DictNode
+
+	for _, d := range set1 {
+		word = d
+		break
+	}
+
+	for _, d := range set2 {
+		translation = d
+		break
+	}
+
+	if word == nil || translation == nil {
+		return fmt.Errorf("failed to select nodes from sets")
+	}
+
+	dict.AddTranslation(word, translation)
+
+	set1Ptr := reflect.ValueOf(set1).Pointer()
+	set2Ptr := reflect.ValueOf(set2).Pointer()
+
+	for l, d := range expectedSet1 {
+		if set1[l] != d {
+			return fmt.Errorf("set1[%s] (%s) was not the expectedSet1[%s] (%s)", l, set1[l].ID, d.Lang, d.ID)
+		}
+		nodeTranslationMapPtr := reflect.ValueOf(d.Translations).Pointer()
+		if nodeTranslationMapPtr != set1Ptr {
+			return fmt.Errorf("set1[%s] (%s) translation map was incorrect, expected %d, got %d", l, set1[l].ID, set1Ptr, nodeTranslationMapPtr)
+		}
+	}
+
+	for l, d := range expectedSet2 {
+		if set2[l] != d {
+			return fmt.Errorf("set2[%s] (%s) was not the expectedSet2[%s] (%s)", l, set2[l].ID, d.Lang, d.ID)
+		}
+		nodeTranslationMapPtr := reflect.ValueOf(d.Translations).Pointer()
+		if nodeTranslationMapPtr != set2Ptr {
+			return fmt.Errorf("set2[%s] (%s) translation map was incorrect, expected %d, got %d", l, set2[l].ID, set2Ptr, nodeTranslationMapPtr)
+		}
+	}
+
+	return nil
+}
+
+func addTranslationSplitSetTest() error {
+	dict := make(TranslationDictionary)
+	for _, l := range SupportedLangs {
+		dict[l.Tag] = make(Dictionary)
+	}
+
+	initA, _ := initSets()
+	set1 := make(map[language.Tag]*DictNode)
+	set2 := make(map[language.Tag]*DictNode)
+
+	var testList []*DictNode
+
+	for _, d := range initA {
+		testList = append(testList, d)
+	}
+
+	splitIndex := len(initA) / 2
+
+	for _, d := range testList[:splitIndex] {
+		d.Translations = set1
+		set1[d.Lang] = d
+	}
+
+	for _, d := range testList[splitIndex:] {
+		d.Translations = set2
+		set2[d.Lang] = d
+	}
+
+	for _, set := range []map[language.Tag]*DictNode{set1, set2} {
+		for _, d := range set {
+			dict[d.Lang][d.ID] = d
+		}
+	}
+
+	var word, translation *DictNode
+
+	for _, d := range set1 {
+		word = d
+		break
+	}
+
+	for _, d := range set2 {
+		translation = d
+		break
+	}
+
+	if word == nil || translation == nil {
+		return fmt.Errorf("failed to select nodes from sets")
+	}
+
+	dict.AddTranslation(word, translation)
+
+	wordTranslationsPtr := reflect.ValueOf(word.Translations).Pointer()
+	translationTranslationsPtr := reflect.ValueOf(translation.Translations).Pointer()
+
+	if wordTranslationsPtr != translationTranslationsPtr {
+		return fmt.Errorf("word translation map ptr %d was not the same as the translation's translation map ptr %d", wordTranslationsPtr, translationTranslationsPtr)
+	}
+
+	for l, d := range initA {
+		if d != word.Translations[l] {
+			return fmt.Errorf("translations did not contain all of initA\ninitA:\n%v\n\ntranslations:\n%v", initA, word.Translations)
+		}
+	}
+
+	return nil
+}
+
+func addTranslationSimilarSetTest() error {
+	dict := make(TranslationDictionary)
+	for _, l := range SupportedLangs {
+		dict[l.Tag] = make(Dictionary)
+	}
+
+	initA, _ := initSets()
+	set1 := make(map[language.Tag]*DictNode)
+	set2 := make(map[language.Tag]*DictNode)
+
+	var testList []*DictNode
+
+	for _, d := range initA {
+		testList = append(testList, d)
+	}
+
+	splitIndex := len(initA) / 2
+
+	for _, d := range testList[:splitIndex] {
+		d.Translations = set1
+		set1[d.Lang] = d
+	}
+
+	for _, d := range testList[min(len(testList)-1, splitIndex+1):] {
+		d.Translations = set2
+		set2[d.Lang] = d
+	}
+
+	for _, set := range []map[language.Tag]*DictNode{set1, set2} {
+		for _, d := range set {
+			dict[d.Lang][d.ID] = d
+		}
+	}
+
+	var word, translation *DictNode
+
+	for _, d := range set1 {
+		word = d
+		break
+	}
+
+	for _, d := range set2 {
+		translation = d
+		break
+	}
+
+	if word == nil || translation == nil {
+		return fmt.Errorf("failed to select nodes from sets")
+	}
+
+	dict.AddTranslation(word, translation)
+
+	wordTranslationsPtr := reflect.ValueOf(word.Translations).Pointer()
+	translationTranslationsPtr := reflect.ValueOf(translation.Translations).Pointer()
+
+	if wordTranslationsPtr != translationTranslationsPtr {
+		return fmt.Errorf("word translation map ptr %d was not the same as the translation's translation map ptr %d", wordTranslationsPtr, translationTranslationsPtr)
+	}
+
+	for l, d := range initA {
+		if d != word.Translations[l] {
+			return fmt.Errorf("translations did not contain all of initA\ninitA:\n%v\n\ntranslations:\n%v", initA, word.Translations)
+		}
+	}
+
+	return nil
+}
+
+func addTranslationHalfSimilarSetTest() error {
+	dict := make(TranslationDictionary)
+	for _, l := range SupportedLangs {
+		dict[l.Tag] = make(Dictionary)
+	}
+
+	initA, set2 := initSets()
+	initB := maps.Clone(set2)
+
+	// We use shallow clones here because we only care about pointer identity,
+	// not the internal state of the nodes. This verifies that AddTranslation
+	// did not replace any node pointers in the set.
+	expectedSet1 := maps.Clone(initA)
+	expectedSet2 := maps.Clone(initB)
+
+	set1 := make(map[language.Tag]*DictNode)
+
+	var testList []*DictNode
+
+	for _, d := range initA {
+		testList = append(testList, d)
+	}
+
+	splitIndex := len(initA) / 2
+
+	insertWord := initB[language.Swedish]
+	insertWord.Translations = set1
+
+	for _, d := range testList[:splitIndex] {
+		if d.Lang == insertWord.Lang {
+			set1[d.Lang] = insertWord
+		} else {
+			d.Translations = set1
+			set1[d.Lang] = d
+		}
+	}
+
+	for _, d := range testList[splitIndex:] {
+		expectedSet1[d.Lang] = expectedSet2[d.Lang]
+	}
+
+	for _, set := range []map[language.Tag]*DictNode{set1, set2} {
+		for _, d := range set {
+			dict[d.Lang][d.ID] = d
+		}
+	}
+
+	var word, translation *DictNode
+
+	for _, d := range set1 {
+		word = d
+		break
+	}
+
+	for _, d := range set2 {
+		translation = d
+		break
+	}
+
+	if word == nil || translation == nil {
+		return fmt.Errorf("failed to select nodes from sets")
+	}
+
+	dict.AddTranslation(word, translation)
+
+	wordTranslationsPtr := reflect.ValueOf(word.Translations).Pointer()
+	translationTranslationsPtr := reflect.ValueOf(translation.Translations).Pointer()
+
+	if wordTranslationsPtr == translationTranslationsPtr {
+		return fmt.Errorf("word and translation points to the same map: %d", wordTranslationsPtr)
+	}
+
+	set1Ptr := reflect.ValueOf(set1).Pointer()
+	set2Ptr := reflect.ValueOf(set2).Pointer()
+
+	for l, d := range expectedSet1 {
+		if set1[l] == nil {
+			return fmt.Errorf("we didn't even have anything in set1[%s] >:(", l)
+		}
+		if set1[l] != d {
+			return fmt.Errorf("set1[%s] (%s) was not the expectedSet1[%s] (%s)", l, set1[l].ID, d.Lang, d.ID)
+		}
+		nodeTranslationMapPtr := reflect.ValueOf(d.Translations).Pointer()
+		if nodeTranslationMapPtr != set1Ptr {
+			return fmt.Errorf("set1[%s] (%s) translation map was incorrect, expected %d, got %d", l, set1[l].ID, set1Ptr, nodeTranslationMapPtr)
+		}
+	}
+
+	for l, d := range expectedSet2 {
+		if set2[l] != d {
+			return fmt.Errorf("set2[%s] (%s) was not the expectedSet2[%s] (%s)", l, set2[l].ID, d.Lang, d.ID)
+		}
+		nodeTranslationMapPtr := reflect.ValueOf(d.Translations).Pointer()
+		if nodeTranslationMapPtr != set2Ptr {
+			return fmt.Errorf("set2[%s] (%s) translation map was incorrect, expected %d, got %d", l, set2[l].ID, set2Ptr, nodeTranslationMapPtr)
+		}
+	}
+
+	return nil
 }
 
 func TestMergeTranslations(t *testing.T) {
